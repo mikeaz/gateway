@@ -165,6 +165,7 @@
     "viem": "^0.3.x"
   },
   "resolutions": {
-    "web3-utils": "1.7.3"
+    "web3-utils": "1.7.3",
+    "@yarnpkg/parsers": "3.0.0-rc.48.1"
   }
 }

@@ -1,4 +1,3 @@
-/* eslint-disable prettier/prettier */
 import { percentRegexp } from '../../services/config-manager-v2';
 import { BigNumber, ContractInterface, Transaction, Wallet } from 'ethers';
 import { OpenoceanConfig } from './openocean.config';
@@ -31,9 +30,6 @@ import {
   UNKNOWN_ERROR_MESSAGE,
 } from '../../services/error-handler';
 import { getAddress } from 'ethers/lib/utils';
-
-const ODOS_QUOTE_URL = 'https://api.odos.xyz/sor/quote/v2';
-const ODOS_ASSEMBLE_URL = 'https://api.odos.xyz/sor/assemble';
 
 export function newFakeTrade(
   tokenIn: Token,
@@ -174,8 +170,6 @@ export class Openocean implements Uniswapish {
       return 'eth';
     } else if (this._chain === 'ethereum' && this._network === 'arbitrum') {
       return 'arbitrum';
-    } else if (this._chain === 'ethereum' && this._network === 'base') {
-      return 'base';
     } else if (this._chain === 'ethereum' && this._network === 'optimism') {
       return 'optimism';
     } else if (this._chain === 'avalanche') {
@@ -212,77 +206,83 @@ export class Openocean implements Uniswapish {
    * @param quoteToken Output from the transaction
    * @param amount Amount of `baseToken` to put into the transaction
    */
-
   async estimateSellTrade(
     baseToken: Token,
     quoteToken: Token,
     amount: BigNumber,
   ): Promise<ExpectedTrade> {
     logger.info(
-      `estimateSellTrade using Odos for baseToken(${baseToken.symbol}): ${baseToken.address} - quoteToken(${quoteToken.symbol}): ${quoteToken.address}.`,
+      `estimateSellTrade getting amounts out baseToken(${baseToken.symbol}): ${baseToken.address} - quoteToken(${quoteToken.symbol}): ${quoteToken.address}.`,
     );
-  
+
     const reqAmount = new Decimal(amount.toString())
       .div(new Decimal((10 ** baseToken.decimals).toString()))
-      .toString();
-  
+      .toNumber();
+    logger.info(`reqAmount(${baseToken.symbol}):${reqAmount}`);
+    const gasPrice = this.chainInstance.gasPrice;
+    let quoteRes;
     try {
-      const response = await axios.post(ODOS_QUOTE_URL, {
-        chainId: this.chainInstance.chainId,
-        inputTokens: [{ tokenAddress: baseToken.address, amount: reqAmount }],
-        outputTokens: [{ tokenAddress: quoteToken.address, proportion: 1.0 }],
-        gasPrice: this.chainInstance.gasPrice,
-        slippageLimitPercent: this.getSlippageNumberage(),
-      });
-  
-      if (response.status === 200) {
-        const data = response.data;
-        logger.info(`Odos Quote: ${JSON.stringify(data)}`);
-  
-        if (data.netOutValue > 0) {
-          const inAmount = BigNumber.from(data.inTokens[0].amount);
-          const outAmount = BigNumber.from(data.outTokens[0].amount);
-  
-          const trade = newFakeTrade(baseToken, quoteToken, inAmount, outAmount);
-          const maximumOutput = new TokenAmount(quoteToken, outAmount.toString());
-          return { trade, expectedAmount: maximumOutput };
-        } else {
-          logger.error(
-            `No valid output from Odos for ${baseToken.address} to ${quoteToken.address}.`,
-          );
-          throw new UniswapishPriceError(
-            `No trade pair found for ${baseToken.address} to ${quoteToken.address}.`,
-          );
-        }
-      } else {
-        logger.error(
-          `Unexpected response from Odos API: ${response.statusText}`,
-        );
-        throw new HttpException(
-          response.status,
-          `Odos API returned unexpected status: ${response.statusText}`,
-          TRADE_FAILED_ERROR_CODE,
-        );
-      }
-    } catch (error) {
-      if (error instanceof Error) {
-        // Handle known Error type
-        logger.error(`Error fetching quote from Odos: ${error.message}`);
+      quoteRes = await axios.get(
+        `https://open-api.openocean.finance/v3/${this.chainName}/quote`,
+        {
+          params: {
+            inTokenAddress: baseToken.address,
+            outTokenAddress: quoteToken.address,
+            amount: reqAmount,
+            gasPrice: gasPrice,
+          },
+        },
+      );
+    } catch (e) {
+      if (e instanceof Error) {
+        logger.error(`Could not get trade info. ${e.message}`);
         throw new HttpException(
           500,
-          `Odos API Error: ${error.message}`,
+          TRADE_FAILED_ERROR_MESSAGE + e.message,
           TRADE_FAILED_ERROR_CODE,
         );
       } else {
-        // Handle unknown error type
-        logger.error('Unknown error type encountered while fetching quote from Odos.');
+        logger.error('Unknown error trying to get trade info.');
         throw new HttpException(
           500,
-          'Unknown Odos API Error',
-          TRADE_FAILED_ERROR_CODE,
+          UNKNOWN_ERROR_MESSAGE,
+          UNKNOWN_ERROR_ERROR_CODE,
         );
       }
     }
+
+    if (quoteRes.status == 200) {
+      if (
+        quoteRes.data.code == 200 &&
+        Number(quoteRes.data.data.outAmount) > 0
+      ) {
+        const quoteData = quoteRes.data.data;
+        logger.info(
+          `estimateSellTrade quoteData inAmount(${baseToken.symbol}): ${quoteData.inAmount}, outAmount(${quoteToken.symbol}): ${quoteData.outAmount}`,
+        );
+        const amounts = [quoteData.inAmount, quoteData.outAmount];
+        const maximumOutput = new TokenAmount(
+          quoteToken,
+          amounts[1].toString(),
+        );
+        const trade = newFakeTrade(
+          baseToken,
+          quoteToken,
+          BigNumber.from(amounts[0]),
+          BigNumber.from(amounts[1]),
+        );
+        return { trade: trade, expectedAmount: maximumOutput };
+      } else {
+        throw new UniswapishPriceError(
+          `priceSwapIn: no trade pair found for ${baseToken.address} to ${quoteToken.address}.`,
+        );
+      }
+    }
+    throw new HttpException(
+      quoteRes.status,
+      `Could not get trade info. ${quoteRes.statusText}`,
+      TRADE_FAILED_ERROR_CODE,
+    );
   }
 
   /**
@@ -301,68 +301,73 @@ export class Openocean implements Uniswapish {
     amount: BigNumber,
   ): Promise<ExpectedTrade> {
     logger.info(
-      `estimateBuyTrade using Odos for quoteToken(${quoteToken.symbol}): ${quoteToken.address} - baseToken(${baseToken.symbol}): ${baseToken.address}.`,
+      `estimateBuyTrade getting amounts in quoteToken(${quoteToken.symbol}): ${quoteToken.address} - baseToken(${baseToken.symbol}): ${baseToken.address}.`,
     );
-  
+
     const reqAmount = new Decimal(amount.toString())
       .div(new Decimal((10 ** baseToken.decimals).toString()))
-      .toString();
-  
+      .toNumber();
+    logger.info(`reqAmount:${reqAmount}`);
+    const gasPrice = this.chainInstance.gasPrice;
+    let quoteRes;
     try {
-      const response = await axios.post(ODOS_QUOTE_URL, {
-        chainId: this.chainInstance.chainId,
-        inputTokens: [{ tokenAddress: quoteToken.address, proportion: 1.0 }],
-        outputTokens: [{ tokenAddress: baseToken.address, amount: reqAmount }],
-        gasPrice: this.chainInstance.gasPrice,
-        slippageLimitPercent: this.getSlippageNumberage(),
-      });
-  
-      if (response.status === 200) {
-        const data = response.data;
-        logger.info(`Odos Quote: ${JSON.stringify(data)}`);
-  
-        if (data.netOutValue > 0) {
-          const inAmount = BigNumber.from(data.inTokens[0].amount);
-          const outAmount = BigNumber.from(data.outTokens[0].amount);
-  
-          const trade = newFakeTrade(quoteToken, baseToken, inAmount, outAmount);
-          const minimumInput = new TokenAmount(quoteToken, inAmount.toString());
-          return { trade, expectedAmount: minimumInput };
-        } else {
-          logger.error(
-            `No valid output from Odos for ${quoteToken.address} to ${baseToken.address}.`,
-          );
-          throw new UniswapishPriceError(
-            `No trade pair found for ${quoteToken.address} to ${baseToken.address}.`,
-          );
-        }
-      } else {
-        logger.error(
-          `Unexpected response from Odos API: ${response.statusText}`,
-        );
-        throw new HttpException(
-          response.status,
-          `Odos API returned unexpected status: ${response.statusText}`,
-          TRADE_FAILED_ERROR_CODE,
-        );
-      }
-    } catch (error) {
-      if (error instanceof Error) {
-        logger.error(`Error fetching quote from Odos: ${error.message}`);
+      quoteRes = await axios.get(
+        `https://open-api.openocean.finance/v3/${this.chainName}/reverseQuote`,
+        {
+          params: {
+            inTokenAddress: baseToken.address,
+            outTokenAddress: quoteToken.address,
+            amount: reqAmount,
+            gasPrice: gasPrice,
+          },
+        },
+      );
+    } catch (e) {
+      if (e instanceof Error) {
+        logger.error(`Could not get trade info. ${e.message}`);
         throw new HttpException(
           500,
-          `Odos API Error: ${error.message}`,
+          TRADE_FAILED_ERROR_MESSAGE + e.message,
           TRADE_FAILED_ERROR_CODE,
         );
       } else {
-        logger.error('Unknown error type encountered while fetching quote from Odos.');
+        logger.error('Unknown error trying to get trade info.');
         throw new HttpException(
           500,
-          'Unknown Odos API Error',
-          TRADE_FAILED_ERROR_CODE,
+          UNKNOWN_ERROR_MESSAGE,
+          UNKNOWN_ERROR_ERROR_CODE,
         );
       }
     }
+    if (quoteRes.status == 200) {
+      if (
+        quoteRes.data.code == 200 &&
+        Number(quoteRes.data.data.reverseAmount) > 0
+      ) {
+        const quoteData = quoteRes.data.data;
+        logger.info(
+          `estimateBuyTrade reverseData inAmount(${quoteToken.symbol}): ${quoteData.reverseAmount}, outAmount(${baseToken.symbol}): ${quoteData.inAmount}`,
+        );
+        const amounts = [quoteData.reverseAmount, quoteData.inAmount];
+        const minimumInput = new TokenAmount(quoteToken, amounts[0].toString());
+        const trade = newFakeTrade(
+          quoteToken,
+          baseToken,
+          BigNumber.from(amounts[0]),
+          BigNumber.from(amounts[1]),
+        );
+        return { trade: trade, expectedAmount: minimumInput };
+      } else {
+        throw new UniswapishPriceError(
+          `priceSwapIn: no trade pair found for ${baseToken} to ${quoteToken}.`,
+        );
+      }
+    }
+    throw new HttpException(
+      quoteRes.status,
+      `Could not get trade info. ${quoteRes.statusText}`,
+      TRADE_FAILED_ERROR_CODE,
+    );
   }
 
   /**
@@ -381,39 +386,81 @@ export class Openocean implements Uniswapish {
    */
   async executeTrade(
     wallet: Wallet,
-    transaction: any, // Transaction object returned from Odos `/sor/assemble`
+    trade: Trade,
+    gasPrice: number,
+    openoceanRouter: string,
+    ttl: number,
+    abi: ContractInterface,
+    gasLimit: number,
+    nonce?: number,
+    maxFeePerGas?: BigNumber,
+    maxPriorityFeePerGas?: BigNumber,
   ): Promise<Transaction> {
+    logger.info(
+      `executeTrade ${openoceanRouter}-${ttl}-${abi}-${gasPrice}-${gasLimit}-${nonce}-${maxFeePerGas}-${maxPriorityFeePerGas}.`,
+    );
+    const inToken: any = trade.route.input;
+    const outToken: any = trade.route.output;
+    let swapRes;
     try {
-      logger.info(`Executing Odos transaction: ${JSON.stringify(transaction)}`);
-  
-      // Prepare the transaction for execution
-      const tx = await wallet.sendTransaction({
-        to: transaction.to, // Odos router address
-        data: transaction.data, // Call data for executing the trade
-        gasLimit: BigNumber.from(transaction.gas), // Suggested gas limit
-        gasPrice: BigNumber.from(transaction.gasPrice), // Suggested gas price
-        value: BigNumber.from(transaction.value), // ETH input value, if applicable
-        chainId: this.chainId, // Chain ID for the transaction
-      });
-  
-      logger.info(`Transaction sent: ${JSON.stringify(tx)}`);
-      return tx; // Return the signed and broadcasted transaction
-    } catch (error) {
-      if (error instanceof Error) {
-        logger.error(`Error executing transaction on Odos: ${error.message}`);
+      swapRes = await axios.get(
+        `https://open-api.openocean.finance/v3/${this.chainName}/swap_quote`,
+        {
+          params: {
+            inTokenAddress: inToken.address,
+            outTokenAddress: outToken.address,
+            amount: trade.inputAmount.toExact(),
+            slippage: this.getSlippageNumberage(),
+            account: wallet.address,
+            gasPrice: gasPrice.toString(),
+            referrer: '0x3fb06064b88a65ba9b9eb840dbb5f3789f002642',
+          },
+        },
+      );
+    } catch (e) {
+      if (e instanceof Error) {
+        logger.error(`Could not get trade info. ${e.message}`);
         throw new HttpException(
           500,
-          `Transaction Execution Error: ${error.message}`,
-          UNKNOWN_ERROR_ERROR_CODE,
+          TRADE_FAILED_ERROR_MESSAGE + e.message,
+          TRADE_FAILED_ERROR_CODE,
         );
       } else {
-        logger.error('Unknown error type encountered during transaction execution.');
+        logger.error('Unknown error trying to get trade info.');
         throw new HttpException(
           500,
-          'Unknown Transaction Execution Error',
+          UNKNOWN_ERROR_MESSAGE,
           UNKNOWN_ERROR_ERROR_CODE,
         );
       }
     }
+    if (swapRes.status == 200 && swapRes.data.code == 200) {
+      const swapData = swapRes.data.data;
+      return this.chainInstance.nonceManager.provideNonce(
+        nonce,
+        wallet.address,
+        async (nextNonce) => {
+          const gas = Math.ceil(Number(swapData.estimatedGas) * 1.15);
+          const trans = {
+            nonce: nextNonce,
+            from: swapData.from,
+            to: swapData.to,
+            gasLimit: BigNumber.from(gas.toString()),
+            data: swapData.data,
+            value: BigNumber.from(swapData.value),
+            chainId: this.chainId,
+          };
+          const tx = await wallet.sendTransaction(trans);
+          logger.info(JSON.stringify(tx));
+
+          return tx;
+        },
+      );
+    }
+    throw new HttpException(
+      swapRes.status,
+      `Could not get trade info. ${swapRes.statusText}`,
+      TRADE_FAILED_ERROR_CODE,
+    );
   }
 }

@@ -13,17 +13,9 @@ contractAddresses:
   avalanche:
     avalanche:
       routerAddress: '0x6352a56caadC4F1E25CD6c75970Fa768A3304e64'
-      ## azorin: Editing these Ethereum addresses to point to ODOS contracts!
   ethereum:
     mainnet:
-      routerAddress: '0xCf5540fFFCdC3d510B18bFcA6d2b9987b0772559'
-    arbitrum:
-      routerAddress: '0xa669e7A0d4b3e4Fa48af2dE86BD4CD7126Be4e13'
-    optimism:
-      routerAddress: '0xCa423977156BB05b13A2BA3b76Bc5419E2fE9680'
-    base:
-      routerAddress: '0x19cEeAd7105607Cd444F5ad10dd51356436095a1'
-      ## azorin :)
+      routerAddress: '0x6352a56caadC4F1E25CD6c75970Fa768A3304e64'
   polygon:
     mainnet:
       routerAddress: '0x6352a56caadC4F1E25CD6c75970Fa768A3304e64'

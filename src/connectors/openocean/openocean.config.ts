@@ -1,3 +1,4 @@
+/* eslint-disable prettier/prettier */
 import { AvailableNetworks } from '../../services/config-manager-types';
 import { ConfigManagerV2 } from '../../services/config-manager-v2';
 
@@ -32,7 +33,7 @@ export namespace OpenoceanConfig {
     chainType: 'EVM',
     availableNetworks: [
       { chain: 'avalanche', networks: ['avalanche'] },
-      { chain: 'ethereum', networks: ['mainnet', 'arbitrum', 'optimism'] },
+      { chain: 'ethereum', networks: ['mainnet', 'arbitrum', 'optimism', 'base'] },
       { chain: 'polygon', networks: ['mainnet'] },
       { chain: 'harmony', networks: ['mainnet'] },
       { chain: 'binance-smart-chain', networks: ['mainnet'] },
