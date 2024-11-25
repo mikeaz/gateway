@@ -25,15 +25,15 @@ import { ExpectedTrade, Uniswapish } from '../../services/common-interfaces';
 import {
   HttpException,
   TRADE_FAILED_ERROR_CODE,
-  TRADE_FAILED_ERROR_MESSAGE,
+//  TRADE_FAILED_ERROR_MESSAGE,
   UniswapishPriceError,
   UNKNOWN_ERROR_ERROR_CODE,
-  UNKNOWN_ERROR_MESSAGE,
+//  UNKNOWN_ERROR_MESSAGE,
 } from '../../services/error-handler';
 import { getAddress } from 'ethers/lib/utils';
 
 const ODOS_QUOTE_URL = 'https://api.odos.xyz/sor/quote/v2';
-const ODOS_ASSEMBLE_URL = 'https://api.odos.xyz/sor/assemble';
+//const ODOS_ASSEMBLE_URL = 'https://api.odos.xyz/sor/assemble';
 
 export function newFakeTrade(
   tokenIn: Token,
@@ -222,17 +222,25 @@ export class Openocean implements Uniswapish {
       `estimateSellTrade using Odos for baseToken(${baseToken.symbol}): ${baseToken.address} - quoteToken(${quoteToken.symbol}): ${quoteToken.address}.`,
     );
   
+    
     const reqAmount = new Decimal(amount.toString())
-      .div(new Decimal((10 ** baseToken.decimals).toString()))
-      .toString();
+    .mul(new Decimal(10).pow(baseToken.decimals))
+    .toFixed(0); // Convert to string without decimals
+    
+
+    //const reqAmount = amount;
   
     try {
       const response = await axios.post(ODOS_QUOTE_URL, {
         chainId: this.chainInstance.chainId,
-        inputTokens: [{ tokenAddress: baseToken.address, amount: reqAmount }],
+        inputTokens: [{ tokenAddress: baseToken.address, amount: reqAmount.toString() }],
         outputTokens: [{ tokenAddress: quoteToken.address, proportion: 1.0 }],
-        gasPrice: this.chainInstance.gasPrice,
+        gasPrice: this.chainInstance.gasPrice.toString(),
         slippageLimitPercent: this.getSlippageNumberage(),
+      }, {
+        headers: {
+          "Content-Type": "application/json", // Set the content type
+        },
       });
   
       if (response.status === 200) {
@@ -240,8 +248,8 @@ export class Openocean implements Uniswapish {
         logger.info(`Odos Quote: ${JSON.stringify(data)}`);
   
         if (data.netOutValue > 0) {
-          const inAmount = BigNumber.from(data.inTokens[0].amount);
-          const outAmount = BigNumber.from(data.outTokens[0].amount);
+          const inAmount = BigNumber.from(data.inAmounts[0]);
+          const outAmount = BigNumber.from(data.outAmounts[0]);
   
           const trade = newFakeTrade(baseToken, quoteToken, inAmount, outAmount);
           const maximumOutput = new TokenAmount(quoteToken, outAmount.toString());
@@ -303,27 +311,78 @@ export class Openocean implements Uniswapish {
     logger.info(
       `estimateBuyTrade using Odos for quoteToken(${quoteToken.symbol}): ${quoteToken.address} - baseToken(${baseToken.symbol}): ${baseToken.address}.`,
     );
-  
+
+    logger.info(
+      `estimateBuyTrade using Odos for chainId:(${this.chainInstance.chainId})`,
+    );
+
+    /*
     const reqAmount = new Decimal(amount.toString())
-      .div(new Decimal((10 ** baseToken.decimals).toString()))
-      .toString();
-  
+    .div(new Decimal((10 ** baseToken.decimals).toString()))
+    .toString();
+    */
+
+    // Convert reqAmount (human-readable) to base units using token decimals
+    const reqAmount = new Decimal(amount.toString())
+    .mul(new Decimal(10).pow(quoteToken.decimals))
+    .toFixed(0); // Convert to string without decimals
+
     try {
-      const response = await axios.post(ODOS_QUOTE_URL, {
+
+      //azorin: print for debugging
+      const payload = {
         chainId: this.chainInstance.chainId,
-        inputTokens: [{ tokenAddress: quoteToken.address, proportion: 1.0 }],
-        outputTokens: [{ tokenAddress: baseToken.address, amount: reqAmount }],
-        gasPrice: this.chainInstance.gasPrice,
+        inputTokens: [
+          {
+            tokenAddress: quoteToken.address,
+            amount: reqAmount.toString(), // Convert BigNumber to string
+          },
+        ],
+        outputTokens: [
+          {
+            tokenAddress: baseToken.address,
+            proportion: 1.0,
+          },
+        ],
+        gasPrice: this.chainInstance.gasPrice.toString(),
         slippageLimitPercent: this.getSlippageNumberage(),
-      });
+      };
   
+      logger.info(`Payload sent to Odos: ${JSON.stringify(payload)}`);
+  
+      const response = await axios.post(
+        ODOS_QUOTE_URL, // API endpoint
+        {
+          chainId: this.chainInstance.chainId,
+          inputTokens: [
+            {
+              tokenAddress: quoteToken.address,
+              amount: reqAmount.toString(), // Ensure this is in string format
+            },
+          ],
+          outputTokens: [
+            {
+              tokenAddress: baseToken.address,
+              proportion: 1.0,
+            },
+          ],
+          gasPrice: this.chainInstance.gasPrice.toString(),
+          slippageLimitPercent: this.getSlippageNumberage(),
+        },
+        {
+          headers: {
+            "Content-Type": "application/json", // Set the content type
+          },
+        },
+      );
+        
       if (response.status === 200) {
         const data = response.data;
         logger.info(`Odos Quote: ${JSON.stringify(data)}`);
   
         if (data.netOutValue > 0) {
-          const inAmount = BigNumber.from(data.inTokens[0].amount);
-          const outAmount = BigNumber.from(data.outTokens[0].amount);
+          const inAmount = BigNumber.from(data.inAmounts[0]);
+          const outAmount = BigNumber.from(data.outAmounts[0]);
   
           const trade = newFakeTrade(quoteToken, baseToken, inAmount, outAmount);
           const minimumInput = new TokenAmount(quoteToken, inAmount.toString());
@@ -365,6 +424,8 @@ export class Openocean implements Uniswapish {
     }
   }
 
+
+  
   /**
    * Given a wallet and a Uniswap-ish trade, try to execute it on blockchain.
    *
